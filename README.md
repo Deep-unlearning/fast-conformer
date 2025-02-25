@@ -3,7 +3,7 @@
 
 <div align="center">
 
-**PyTorch implementation of Conformer: Convolution-augmented Transformer for Speech Recognition.**
+**PyTorch implementation of Conformer variants for Speech Recognition**
 
   
 </div>
@@ -25,11 +25,21 @@
      </a>
 
   
-Transformer models are good at capturing content-based global interactions, while CNNs exploit local features effectively. Conformer combine convolution neural networks and transformers to model both local and global dependencies of an audio sequence in a parameter-efficient way. Conformer significantly outperforms the previous Transformer and CNN based models achieving state-of-the-art accuracies.   
+This repository contains PyTorch implementations of various Conformer architectures for speech recognition. Conformer models combine convolution neural networks and transformers to model both local and global dependencies of an audio sequence in a parameter-efficient way. The original Conformer significantly outperforms previous Transformer and CNN-based models, achieving state-of-the-art accuracies.
+
+## Implemented Architectures
+
+1. **Original Conformer** - The standard architecture as introduced in the paper "Conformer: Convolution-augmented Transformer for Speech Recognition"
+   
+2. **Fast Conformer** - An optimized version that achieves 2.8× faster inference than the original Conformer through:
+   - 8x downsampling (vs 4x in original) using three depthwise separable convolutions
+   - Reduced channel count (256 instead of 512) in the subsampling blocks
+   - Smaller kernel size (9 instead of 31) in convolutional modules
+   - Support for linearly scalable attention for long-form audio via limited context + global token
 
 <img src="https://user-images.githubusercontent.com/42150335/105602364-aeafad80-5dd8-11eb-8886-b75e2d9d31f4.png" height=600>
   
-This repository contains only model code, but you can train with conformer at [openspeech](https://github.com/openspeech-team/openspeech)
+This repository contains model code only, but you can train with conformer variants at [openspeech](https://github.com/openspeech-team/openspeech)
   
 ## Installation
 This project recommends Python 3.7 or higher.
@@ -48,6 +58,8 @@ pip install -e .
 ```
 
 ## Usage
+
+### Original Conformer
 
 ```python
 import torch
@@ -79,23 +91,43 @@ outputs, output_lengths = model(inputs, input_lengths)
 # Calculate CTC Loss
 loss = criterion(outputs.transpose(0, 1), targets, output_lengths, target_lengths)
 ```
-  
-## Troubleshoots and Contributing
-If you have any questions, bug reports, and feature requests, please [open an issue](https://github.com/sooftware/conformer/issues) on github or   
-contacts sh951011@gmail.com please.
-  
-I appreciate any kind of feedback or contribution.  Feel free to proceed with small issues like bug fixes, documentation improvement.  For major contributions and new features, please discuss with the collaborators in corresponding issues.  
-  
-## Code Style
-I follow [PEP-8](https://www.python.org/dev/peps/pep-0008/) for code style. Especially the style of docstrings is important to generate documentation.  
-  
-## Reference
-- [Conformer: Convolution-augmented Transformer for Speech Recognition](https://arxiv.org/pdf/2005.08100.pdf)
-- [Transformer-XL: Attentive Language Models Beyond a Fixed-Length Context](https://arxiv.org/abs/1901.02860)
-- [kimiyoung/transformer-xl](https://github.com/kimiyoung/transformer-xl)
-- [espnet/espnet](https://github.com/espnet/espnet)
-  
-## Author
-  
-* Soohwan Kim [@sooftware](https://github.com/sooftware)
-* Contacts: sh951011@gmail.com
+
+### Fast Conformer
+
+```python
+import torch
+import torch.nn as nn
+from conformer import FastConformer
+
+batch_size, sequence_length, dim = 3, 12345, 80
+
+cuda = torch.cuda.is_available()  
+device = torch.device('cuda' if cuda else 'cpu')
+
+criterion = nn.CTCLoss().to(device)
+
+inputs = torch.rand(batch_size, sequence_length, dim).to(device)
+input_lengths = torch.LongTensor([12345, 12300, 12000])
+targets = torch.LongTensor([[1, 3, 3, 3, 3, 3, 4, 5, 6, 2],
+                            [1, 3, 3, 3, 3, 3, 4, 5, 2, 0],
+                            [1, 3, 3, 3, 3, 3, 4, 2, 0, 0]]).to(device)
+target_lengths = torch.LongTensor([9, 8, 7])
+
+model = FastConformer(num_classes=10, 
+                      input_dim=dim, 
+                      encoder_dim=32, 
+                      num_encoder_layers=3,
+                      conv_kernel_size=9).to(device)
+
+# Forward propagate
+outputs, output_lengths = model(inputs, input_lengths)
+
+# Calculate CTC Loss
+loss = criterion(outputs.transpose(0, 1), targets, output_lengths, target_lengths)
+```
+
+## TODO
+
+- [ ] Training scripts
+
+- [ ] Inference scripts
