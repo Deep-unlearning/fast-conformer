@@ -184,3 +184,130 @@ class Conv2dSubampling(nn.Module):
         output_lengths -= 1
 
         return outputs, output_lengths
+
+
+class DepthwiseSeparableConv2d(nn.Module):
+    """
+    Depthwise separable 2D convolution.
+    
+    Args:
+        in_channels (int): Number of input channels
+        out_channels (int): Number of output channels
+        kernel_size (int): Size of the convolving kernel
+        stride (int, optional): Stride of the convolution. Default: 1
+        padding (int, optional): Zero-padding added to both sides of the input. Default: 0
+        bias (bool, optional): If True, adds a learnable bias to the output. Default: True
+        
+    Inputs: inputs
+        - **inputs** (batch, in_channels, time, freq): Tensor containing input
+        
+    Returns: outputs
+        - **outputs** (batch, out_channels, time, freq): Tensor produced by depthwise separable 2D convolution
+    """
+    def __init__(
+            self,
+            in_channels: int,
+            out_channels: int,
+            kernel_size: int,
+            stride: int = 1,
+            padding: int = 0,
+            bias: bool = True,
+    ) -> None:
+        super(DepthwiseSeparableConv2d, self).__init__()
+        self.depthwise = nn.Conv2d(
+            in_channels=in_channels,
+            out_channels=in_channels,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=padding,
+            groups=in_channels,
+            bias=bias
+        )
+        self.pointwise = nn.Conv2d(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel_size=1,
+            bias=bias
+        )
+    
+    def forward(self, inputs: Tensor) -> Tensor:
+        return self.pointwise(self.depthwise(inputs))
+
+
+class FastConformerSubsampling(nn.Module):
+    """
+    Fast Conformer subsampling module that reduces sequence length by 8x.
+    
+    As described in the paper, this uses:
+    1. Three consecutive depthwise separable convolutions
+    2. Reduced channel count (256)
+    3. Smaller kernel size (9)
+    
+    Args:
+        in_channels (int): Number of channels in the input (typically 1 for raw audio spectrogram)
+        out_channels (int): Number of channels produced by the convolution (typically model dimension)
+        
+    Inputs: inputs, input_lengths
+        - **inputs** (batch, time, dim): Tensor containing input vectors
+        - **input_lengths** (batch): Tensor containing sequence lengths
+        
+    Returns: outputs, output_lengths
+        - **outputs** (batch, time, dim): Tensor produced by the convolution
+        - **output_lengths** (batch): Tensor containing output sequence lengths
+    """
+    def __init__(self, in_channels: int, out_channels: int) -> None:
+        super(FastConformerSubsampling, self).__init__()
+        # First layer: stride=2 for 2x downsampling
+        self.layer1 = DepthwiseSeparableConv2d(
+            in_channels=in_channels,
+            out_channels=256,
+            kernel_size=9,
+            stride=2,
+            padding=4
+        )
+        self.activation1 = nn.ReLU()
+        
+        # Second layer: stride=2 for another 2x downsampling (total 4x)
+        self.layer2 = DepthwiseSeparableConv2d(
+            in_channels=256,
+            out_channels=256,
+            kernel_size=9,
+            stride=2,
+            padding=4
+        )
+        self.activation2 = nn.ReLU()
+        
+        # Third layer: stride=2 for another 2x downsampling (total 8x)
+        self.layer3 = DepthwiseSeparableConv2d(
+            in_channels=256,
+            out_channels=256,
+            kernel_size=9,
+            stride=2,
+            padding=4
+        )
+        self.activation3 = nn.ReLU()
+        
+        # Final projection to match model dimension
+        self.projection = nn.Linear(256, out_channels)
+    
+    def forward(self, inputs: Tensor, input_lengths: Tensor) -> Tuple[Tensor, Tensor]:
+        # inputs shape: (batch, time, dim)
+        # Convert to (batch, channels, time, freq) for Conv2d
+        batch_size, time, dim = inputs.size()
+        inputs = inputs.unsqueeze(1)  # (batch, 1, time, dim)
+        
+        # Apply three layers of 2x downsampling
+        outputs = self.activation1(self.layer1(inputs))
+        outputs = self.activation2(self.layer2(outputs))
+        outputs = self.activation3(self.layer3(outputs))
+        
+        # Reshape and project to model dimension
+        batch_size, channels, subsampled_time, subsampled_dim = outputs.size()
+        outputs = outputs.permute(0, 2, 1, 3)  # (batch, time, channels, dim)
+        outputs = outputs.contiguous().view(batch_size, subsampled_time, channels * subsampled_dim)
+        outputs = self.projection(outputs)
+        
+        # Calculate new sequence lengths (8x reduction)
+        output_lengths = input_lengths >> 3  # Divide by 8
+        
+        return outputs, output_lengths
